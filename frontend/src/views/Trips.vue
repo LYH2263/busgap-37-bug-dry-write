@@ -6,7 +6,8 @@ const events = ref<any[]>([])
 onMounted(async () => {
   trips.value = await api('/trips')
   try {
-    events.value = (await api('/reports/run?line_id=1', { method: 'POST' })).events || []
+    // 本页只读展示间隔条带，走试算口，绝不因浏览页面产生报告行
+    events.value = (await api('/reports/preview?line_id=1', { method: 'POST' })).events || []
   } catch { events.value = [] }
 })
 function stripClass(s: string) {
@@ -19,7 +20,7 @@ function label(s: string) {
 <template>
   <h1>班次 · 间隔条带</h1>
   <p class="sub">左侧班次清单，右侧串车/间隔竖直条带</p>
-  <p class="muted">业务页与检测读口未强制同参与集</p>
+  <p class="muted">右侧条带为试算结果（只读，不落报告）；落库请在「串车报告」页执行重新检测</p>
   <div class="bg-split">
     <aside class="bg-trip-col">
       <h2>班次列表</h2>

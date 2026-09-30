@@ -5,7 +5,7 @@ os.environ["DATABASE_URL"] = "sqlite+pysqlite:///:memory:"
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, select
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
@@ -69,6 +69,17 @@ def test_preview_does_not_create_report(ctx):
     assert len(listed) == before
 
 
+def test_preview_twice_keeps_count_still(ctx):
+    """连点两次试算，报告行数必须原地不动。"""
+    before = report_count(ctx["session"])
+    for _ in range(2):
+        resp = ctx["client"].post("/api/reports/preview?line_id=1")
+        assert resp.status_code == 200
+        assert resp.json()["saved"] is False
+    assert report_count(ctx["session"]) == before
+    assert len(ctx["client"].get("/api/reports").json()) == before
+
+
 def test_preview_specific_stop(ctx):
     """试算支持指定站点，只返回该站事件，仍不写报告。"""
     before = report_count(ctx["session"])
@@ -100,13 +111,80 @@ def test_run_still_creates_one_report(ctx):
     assert listed[0]["events"] == r["events"]
 
 
-def test_suggestions_does_not_create_report(ctx):
-    """建议接口复用只读试算逻辑，也不应再产生报告。"""
+def test_run_failure_keeps_existing_reports(ctx, monkeypatch):
+    """真检落库失败：如实报 500、不伪装成试算成功，旧报告行一条不丢，恢复后能正常补落。"""
+    ok = ctx["client"].post("/api/reports/run?line_id=1")
+    assert ok.status_code == 200
+    before = report_count(ctx["session"])
+    assert before >= 1
+    surviving = ctx["client"].get("/api/reports").json()
+
+    def broken_commit(self):
+        raise RuntimeError("simulated disk failure")
+
+    monkeypatch.setattr(Session, "commit", broken_commit)
+    failed = ctx["client"].post("/api/reports/run?line_id=1")
+    monkeypatch.undo()
+
+    assert failed.status_code == 500
+    # 失败响应不能伪装成试算/成功
+    assert failed.json().get("saved") is not True
+    # 旧行与轴点对应数据原封不动
+    assert report_count(ctx["session"]) == before
+    assert ctx["client"].get("/api/reports").json() == surviving
+
+    # 故障恢复后真检不得空转：再跑一次应恰好新增一行
+    again = ctx["client"].post("/api/reports/run?line_id=1")
+    assert again.status_code == 200
+    body = again.json()
+    assert body["saved"] is True and body["id"] is not None
+    assert report_count(ctx["session"]) == before + 1
+
+
+def test_suggestions_empty_without_saved_report(ctx):
+    """没有已落库报告时建议为空，且接口自身不产生报告。"""
     before = report_count(ctx["session"])
     resp = ctx["client"].get("/api/reports/suggestions?line_id=1")
     assert resp.status_code == 200
-    assert all(e["status"] != "normal" for e in resp.json()["suggestions"])
+    body = resp.json()
+    assert body["saved"] is False
+    assert body["report_id"] is None
+    assert body["suggestions"] == []
     assert report_count(ctx["session"]) == before
+
+
+def test_suggestions_reflect_only_saved_report(ctx):
+    """试算不得进建议；真检后建议与该报告同一套事件。"""
+    ctx["client"].post("/api/reports/preview?line_id=1")
+    empty = ctx["client"].get("/api/reports/suggestions?line_id=1").json()
+    assert empty["suggestions"] == [] and empty["report_id"] is None
+
+    run = ctx["client"].post("/api/reports/run?line_id=1").json()
+    res = ctx["client"].get("/api/reports/suggestions?line_id=1").json()
+    assert res["saved"] is True
+    assert res["report_id"] == run["id"]
+    expected = [e for e in run["events"] if e["status"] != "normal"]
+    assert res["suggestions"] == expected
+
+    # 再来一次试算不得污染已落库建议
+    ctx["client"].post("/api/reports/preview?line_id=1&stop_name=市民中心")
+    res2 = ctx["client"].get("/api/reports/suggestions?line_id=1").json()
+    assert res2["report_id"] == run["id"]
+    assert res2["suggestions"] == expected
+
+
+def test_preview_and_run_do_not_touch_timeline(ctx):
+    """时间轴只来自真实到站：试算不添脏点，真检也不单独加点。"""
+    base = ctx["client"].get("/api/reports/timeline?line_id=1").json()
+    assert base["marks"]
+
+    ctx["client"].post("/api/reports/preview?line_id=1")
+    after_preview = ctx["client"].get("/api/reports/timeline?line_id=1").json()
+    assert after_preview == base
+
+    ctx["client"].post("/api/reports/run?line_id=1")
+    after_run = ctx["client"].get("/api/reports/timeline?line_id=1").json()
+    assert after_run == base
 
 
 def test_preview_unknown_line_404(ctx):

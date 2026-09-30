@@ -204,6 +204,11 @@ th { color: var(--bg-dim); font-weight: 600; font-size: 0.78rem; }
   border-left: 3px solid var(--bg-ok);
 }
 .bg-strip-preview .bg-gap-strip { border-style: dashed; opacity: 0.9; }
+.bg-view-error {
+  color: var(--bg-red);
+  background: rgba(255,77,109,0.1);
+  border-left: 3px solid var(--bg-red);
+}
 .bg-history-title {
   margin: 0 0 0.6rem; font-size: 0.9rem; font-weight: 700;
   color: var(--bg-cyan); letter-spacing: 0.04em;

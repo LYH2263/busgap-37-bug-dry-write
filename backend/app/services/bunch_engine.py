@@ -40,8 +40,10 @@ def events_to_dicts(events: list[GapEvent]) -> list[dict]:
 # topic helpers for report assembly
 
 def preview_should_persist() -> bool:
-    return True
+    # 试算只吐事件，绝不落库
+    return False
 
 def run_should_persist() -> bool:
-    return False
+    # 真检才落一行报告
+    return True
 

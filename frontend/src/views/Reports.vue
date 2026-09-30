@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { api } from '../api'
-import { unifyStatusLabel, axisKeepsAllMarks, noticeForFork } from '../viewHints'
+import { unifyStatusLabel } from '../viewHints'
 
 const trips = ref<any[]>([])
 const events = ref<any[]>([])
@@ -10,7 +10,8 @@ const stops = ref<string[]>([])
 const stopName = ref('')
 const loading = ref(false)
 const previewing = ref(false)
-// 当前结果区展示的是「试算结果」还是「已保存报告」
+const errorMsg = ref('')
+// 当前结果区展示的是「试算结果（未落库）」还是「已保存报告」
 const viewing = ref<{ kind: 'preview' | 'saved'; id?: number } | null>(null)
 
 const savedCount = computed(() => reports.value.length)
@@ -23,29 +24,41 @@ async function loadReports() {
   reports.value = await api('/reports')
 }
 
-// 试算：只返回事件，不写入报告
+// 试算：只返回事件，不写入报告、不刷新历史条数
 async function preview() {
   previewing.value = true
+  errorMsg.value = ''
   try {
     const res = await api(`/reports/preview?line_id=1${scopeQuery()}`, { method: 'POST' })
     events.value = res.events || []
-    viewing.value = { kind: 'saved', id: res.id }
-    await loadReports()
+    viewing.value = { kind: 'preview' }
+  } catch (e: any) {
+    errorMsg.value = `试算失败：${e?.message || e}`
   } finally { previewing.value = false }
 }
 
+// 真检：成功后恰好新增一条已保存报告，再刷新历史；失败如实提示，不伪装成试算
 async function run() {
   loading.value = true
+  errorMsg.value = ''
   try {
     const res = await api(`/reports/run?line_id=1${scopeQuery()}`, { method: 'POST' })
+    if (!res?.saved || res.id == null) {
+      // 后端没落成行却回了成功，视为失败而非空转
+      throw new Error('服务端未生成报告行')
+    }
     events.value = res.events || []
-    viewing.value = { kind: 'preview' }
+    viewing.value = { kind: 'saved', id: res.id }
+    await loadReports()
+  } catch (e: any) {
+    errorMsg.value = `重新检测失败：${e?.message || e}（已有报告未受影响）`
   } finally { loading.value = false }
 }
 
 function viewSaved(r: any) {
   events.value = r.events || []
   viewing.value = { kind: 'saved', id: r.id }
+  errorMsg.value = ''
 }
 
 onMounted(async () => {
@@ -70,7 +83,7 @@ function fmtTime(iso: string) {
 </script>
 <template>
   <h1>串车报告</h1>
-  <p class="sub">按实际到站间隔对照计划发车间隔 · 竖直条带展示</p>
+  <p class="sub">按实际到站间隔对照计划发车间隔 · 试算只看事件不落库，「重新检测」才生成报告行</p>
   <div class="bg-report-bar">
     <label class="bg-scope">
       范围
@@ -81,10 +94,14 @@ function fmtTime(iso: string) {
     </label>
     <button class="btn" :disabled="previewing" @click="preview">试算</button>
     <button class="btn" :disabled="loading" @click="run">重新检测</button>
-    <span class="muted">已保存报告 {{ savedCount }} 条</span>
+    <span class="muted">已保存报告 {{ savedCount }} 条（试算不改变此数）</span>
   </div>
-  <p v-if="viewing" class="bg-view-tag bg-view-preview">
-    当前结果（试算与已存报告共用同一展示区）
+  <p v-if="errorMsg" class="bg-view-tag bg-view-error">{{ errorMsg }}</p>
+  <p v-if="viewing?.kind === 'preview'" class="bg-view-tag bg-view-preview">
+    当前结果：试算块（未落库 · 不占报告行 · 不产生时间轴点）
+  </p>
+  <p v-else-if="viewing?.kind === 'saved'" class="bg-view-tag bg-view-saved">
+    当前结果：已保存报告 #{{ viewing.id }}
   </p>
   <div class="bg-split" style="margin-top:1rem">
     <aside class="bg-trip-col">
@@ -117,7 +134,7 @@ function fmtTime(iso: string) {
     </div>
   </div>
   <section class="card" style="margin-top:1rem">
-    <h2 class="bg-history-title">历史报告（{{ savedCount }} 条）</h2>
+    <h2 class="bg-history-title">历史报告（{{ savedCount }} 条，仅真检写入）</h2>
     <table v-if="reports.length">
       <thead>
         <tr><th>ID</th><th>范围</th><th>生成时间</th><th>事件数</th><th></th></tr>
