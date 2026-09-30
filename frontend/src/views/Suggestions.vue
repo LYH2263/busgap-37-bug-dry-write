@@ -7,7 +7,7 @@ onMounted(async () => { tips.value = (await api('/reports/suggestions?line_id=1'
 </script>
 <template>
   <h1>建议</h1>
-  <p class="sub">建议列表来自最近一次计算，不区分试算与落库</p>
+  <p class="sub">建议为按当前阈值实时只读计算，不来自试算，也不代表已落库报告</p>
   <div class="card" v-for="(t,i) in tips" :key="i">
     <div><strong>{{ t.stop_name }}</strong> · {{ t.earlier_trip }} → {{ t.later_trip }} · 间隔 {{ t.gap_min }} 分</div>
     <p class="muted">{{ t.suggestion }}</p>

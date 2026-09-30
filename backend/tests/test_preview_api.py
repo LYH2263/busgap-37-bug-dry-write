@@ -112,3 +112,49 @@ def test_suggestions_does_not_create_report(ctx):
 def test_preview_unknown_line_404(ctx):
     resp = ctx["client"].post("/api/reports/preview?line_id=999")
     assert resp.status_code == 404
+
+
+def test_double_preview_keeps_count_and_timeline(ctx):
+    """连点两次试算：报告条数原地不动，时间轴也不得多脏点。"""
+    before = report_count(ctx["session"])
+    marks_before = ctx["client"].get("/api/reports/timeline?line_id=1&stop_name=市民中心").json()["marks"]
+
+    for _ in range(2):
+        resp = ctx["client"].post("/api/reports/preview?line_id=1")
+        assert resp.status_code == 200
+        assert resp.json()["saved"] is False
+
+    assert report_count(ctx["session"]) == before
+    marks_after = ctx["client"].get("/api/reports/timeline?line_id=1&stop_name=市民中心").json()["marks"]
+    assert len(marks_after) == len(marks_before)
+    assert marks_after == marks_before
+
+
+def test_run_failure_keeps_existing_reports(ctx):
+    """真检失败（线路不存在 404）不得清掉已落报告行。"""
+    ok = ctx["client"].post("/api/reports/run?line_id=1")
+    assert ok.status_code == 200
+    kept_id = ok.json()["id"]
+    assert report_count(ctx["session"]) == 1
+
+    bad = ctx["client"].post("/api/reports/run?line_id=999")
+    assert bad.status_code == 404
+
+    listed = ctx["client"].get("/api/reports").json()
+    assert len(listed) == 1
+    assert listed[0]["id"] == kept_id
+
+
+def test_run_with_zero_events_still_persists_one(ctx):
+    """真检跑通但无异常/无事件时也不得空转：仍恰好落一行。"""
+    before = report_count(ctx["session"])
+    resp = ctx["client"].post("/api/reports/run?line_id=1&stop_name=不存在的站点")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["saved"] is True
+    assert body["id"] is not None
+    assert body["events"] == []
+    assert report_count(ctx["session"]) == before + 1
+    listed = ctx["client"].get("/api/reports").json()
+    assert listed[0]["id"] == body["id"]
+    assert listed[0]["events"] == []

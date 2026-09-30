@@ -10,6 +10,7 @@ const stops = ref<string[]>([])
 const stopName = ref('')
 const loading = ref(false)
 const previewing = ref(false)
+const error = ref('')
 // 当前结果区展示的是「试算结果」还是「已保存报告」
 const viewing = ref<{ kind: 'preview' | 'saved'; id?: number } | null>(null)
 
@@ -23,23 +24,31 @@ async function loadReports() {
   reports.value = await api('/reports')
 }
 
-// 试算：只返回事件，不写入报告
+// 试算：只返回事件，不写入报告；不刷新已存报告条数，也不碰时间轴
 async function preview() {
   previewing.value = true
+  error.value = ''
   try {
     const res = await api(`/reports/preview?line_id=1${scopeQuery()}`, { method: 'POST' })
     events.value = res.events || []
-    viewing.value = { kind: 'saved', id: res.id }
-    await loadReports()
+    viewing.value = { kind: 'preview' }
+  } catch (e: any) {
+    error.value = '试算失败：' + (e?.message || '未知错误')
   } finally { previewing.value = false }
 }
 
+// 真检：成功才新增一条已存报告并刷新列表；失败保留旧报告与当前结果，不伪装成试算
 async function run() {
   loading.value = true
+  error.value = ''
   try {
     const res = await api(`/reports/run?line_id=1${scopeQuery()}`, { method: 'POST' })
+    if (!res?.saved || res.id == null) throw new Error('服务端未确认落库')
     events.value = res.events || []
-    viewing.value = { kind: 'preview' }
+    viewing.value = { kind: 'saved', id: res.id }
+    await loadReports()
+  } catch (e: any) {
+    error.value = '检测失败，未生成新报告，既有报告保留：' + (e?.message || '未知错误')
   } finally { loading.value = false }
 }
 
@@ -83,8 +92,10 @@ function fmtTime(iso: string) {
     <button class="btn" :disabled="loading" @click="run">重新检测</button>
     <span class="muted">已保存报告 {{ savedCount }} 条</span>
   </div>
-  <p v-if="viewing" class="bg-view-tag bg-view-preview">
-    当前结果（试算与已存报告共用同一展示区）
+  <p v-if="error" class="badge badge-bad" style="margin-top:.6rem">{{ error }}</p>
+  <p v-if="viewing" class="bg-view-tag" :class="viewing.kind === 'preview' ? 'bg-view-preview' : 'bg-view-saved'">
+    <template v-if="viewing.kind === 'preview'">试算结果（不落库，不影响已存报告与时间轴）</template>
+    <template v-else>已存报告 #{{ viewing.id }}（已落库，报告 / 时间轴 / 建议基于同一套检测数据）</template>
   </p>
   <div class="bg-split" style="margin-top:1rem">
     <aside class="bg-trip-col">

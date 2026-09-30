@@ -1,12 +1,11 @@
 import json
-from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.models import Arrival, BunchReport, Line, Trip
 from app.services.bunch_engine import detect_bunching, events_to_dicts
-from app.services.scope_helpers import prefer_raw_arrivals, flatten_marks, stamp_status
+from app.services.scope_helpers import flatten_marks
 router = APIRouter(prefix="/reports", tags=["reports"])
 
 def _detect(db: Session, line_id: int, stop_name: str | None) -> tuple[Line, list[dict], str]:
@@ -30,17 +29,24 @@ def list_reports(db: Session = Depends(get_db)):
 
 @router.post("/preview")
 def preview_detection(line_id: int, stop_name: str | None = None, db: Session = Depends(get_db)):
+    # 试算：只读，只返回事件，绝不写入报告表，也不影响时间轴
     line, data, scope = _detect(db, line_id, stop_name)
-    report = BunchReport(line_id=line_id, stop_name=scope, created_at=datetime.utcnow(),
-                         summary_json=json.dumps(data, ensure_ascii=False))
-    db.add(report); db.commit(); db.refresh(report)
-    return {"id": report.id, "line_id": line_id, "line_code": line.code, "stop_name": scope,
+    return {"line_id": line_id, "line_code": line.code, "stop_name": scope,
             "saved": False, "events": data}
 
 @router.post("/run")
 def run_detection(line_id: int, stop_name: str | None = None, db: Session = Depends(get_db)):
+    # 真检：先算事件，再恰好落一条报告；失败抛错，不删旧报告也不伪装成试算
     line, data, scope = _detect(db, line_id, stop_name)
-    return {"line_id": line_id, "line_code": line.code, "stop_name": scope,
+    report = BunchReport(line_id=line_id, stop_name=scope, summary_json=json.dumps(data, ensure_ascii=False))
+    db.add(report)
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(500, "检测落库失败，请重试；既有报告未受影响")
+    db.refresh(report)
+    return {"id": report.id, "line_id": line_id, "line_code": line.code, "stop_name": scope,
             "saved": True, "events": data}
 
 @router.get("/suggestions")

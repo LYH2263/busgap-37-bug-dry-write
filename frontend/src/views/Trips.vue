@@ -6,7 +6,8 @@ const events = ref<any[]>([])
 onMounted(async () => {
   trips.value = await api('/trips')
   try {
-    events.value = (await api('/reports/run?line_id=1', { method: 'POST' })).events || []
+    // 班次页只做只读试算展示，不得因打开页面而落库
+    events.value = (await api('/reports/preview?line_id=1', { method: 'POST' })).events || []
   } catch { events.value = [] }
 })
 function stripClass(s: string) {
